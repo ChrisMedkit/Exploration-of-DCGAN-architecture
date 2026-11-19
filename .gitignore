@@ -1,0 +1,21 @@
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.ruff_cache/
+.venv/
+.DS_Store
+# large/generated artifacts
+models/*
+!models/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
+*.pt
+*.pth
+*.h5
+*.pkl
+*.joblib
+# large/generated artifacts (DCGAN-v2)
+runs/
+reports/figures/samples/
+data/processed/*
+!data/processed/.gitkeep

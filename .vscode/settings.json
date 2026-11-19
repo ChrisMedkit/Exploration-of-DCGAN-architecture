@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "/Users/chrismedina/.venvs/aml-dcgan-v2/bin/python",
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "files.exclude": { "**/.ipynb_checkpoints": true }
+}

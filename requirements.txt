@@ -1,0 +1,16 @@
+# Python env: ~/.venvs/aml-dcgan-v2 (uv venv --system-site-packages on Anaconda base)
+# Milestone 0 needs only what is already in Anaconda base:
+torch          # MPS backend on Apple silicon
+torchvision    # Flowers102 download, transforms, save_image
+numpy
+pandas
+matplotlib
+scipy          # Flowers102 .mat labels; Welch t-test
+tqdm
+pytest
+ipykernel
+# Milestone 1+: frozen text encoder (already installed in Anaconda base)
+# clip @ git+https://github.com/openai/CLIP.git
+# Milestone 3-4 (installed in the venv):
+torchmetrics[image]   # FrechetInceptionDistance (pulls torch-fidelity)
+gradio                # app.py front end
