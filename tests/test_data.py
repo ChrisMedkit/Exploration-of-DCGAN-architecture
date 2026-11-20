@@ -47,6 +47,21 @@ def test_class_split_is_disjoint_by_class(tmp_path):
     assert len(train_cls) == 82 and len(test_cls) == 20 and not (train_cls & test_cls)
 
 
+def test_class_split_reads_reed_files(tmp_path):
+    (tmp_path / "trainvalclasses.txt").write_text("class_00001\nclass_00002\n")
+    (tmp_path / "testclasses.txt").write_text("class_00003\n")
+    labels = torch.tensor([0, 1, 2, 2])
+    split = data.class_split(labels, captions_dir=tmp_path / "text_c10")
+    assert split["source"] == "reed"
+    assert split["train"].tolist() == [0, 1] and split["test"].tolist() == [2, 3]
+
+
+def test_check_captions_flags_short_and_missing():
+    import pytest
+    with pytest.raises(ValueError):
+        data.check_captions({"image_00001": ["only one"]}, ["image_00001", "image_00002"], per_image=10)
+
+
 def test_wrong_caption_comes_from_another_class():
     imgs = torch.zeros(6, 3, 64, 64, dtype=torch.uint8)
     labels = torch.tensor([0, 0, 1, 1, 2, 2])

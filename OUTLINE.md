@@ -29,8 +29,8 @@ This rebuilds the Project 1 text-to-image DCGAN so that it actually generates im
 ## Requirements
 - [ ] Topic from a course section: §3 Generative Modeling (GANs, conditional generation)
 - [ ] Working text → image generator (the Project 1 end goal)
-- [ ] **M0:** unconditional DCGAN produces recognizable flowers at 64×64 (E0)
-- [ ] **M1:** CLIP-conditioned DCGAN (E1)
+- [x] **M0:** unconditional DCGAN produces recognizable flowers at 64×64 (E0)
+- [x] **M1:** CLIP-conditioned DCGAN (E1): code done; 5-epoch check run, full run pending
 - [ ] **M2:** GAN-CLS matching-aware D (E2) and GAN-INT (E3)
 - [ ] **M3:** FID + CLIP score for E0–E3 × 3 seeds, with a significance test
 - [ ] **M4:** front end (text box → images), `app.py`

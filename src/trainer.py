@@ -101,19 +101,36 @@ def train_one_epoch(G, D, opt_g, opt_d, loader, device, mode: str = "dcgan",
                          d_fake=torch.sigmoid(s_fake).mean().item(),
                          acc_real=_accuracy(s_real, 1.0), acc_fake=_accuracy(s_fake, 0.0))
 
-        elif mode in ("cond", "gan_cls"):
-            # TODO (Plan steps 7-9), same structure as the dcgan branch:
-            #   x, t, t_wrong, _ = (v.to(device) for v in batch); z = randn(b, G.latent_dim, 1, 1)
-            #   fake = G(z, t)
-            #   D step:
-            #     s_real = D(x, t); s_fake = D(fake.detach(), t)
-            #     cond:    loss_d = d_loss_dcgan(s_real, s_fake)
-            #     gan_cls: s_wrong = D(x, t_wrong); loss_d = d_loss_gan_cls(s_real, s_wrong, s_fake)
-            #   G step:
-            #     loss_g = g_loss(D(fake, t))
-            #     if interpolate: t_int = interpolate_text(t); loss_g = loss_g + g_loss(D(G(z, t_int), t_int))
-            #   stats: as above, plus d_wrong / acc_wrong for gan_cls
-            raise NotImplementedError(f"mode {mode!r} comes in milestone 1+ (Plan steps 7-9)")
+        elif mode == "cond":
+            # E1: same loop as dcgan, but G and D both also see the caption embedding t.
+            x, t = batch[0].to(device), batch[1].to(device)
+            b = x.size(0)
+            z = torch.randn(b, G.latent_dim, 1, 1, device=device)
+            fake = G(z, t)
+
+            opt_d.zero_grad(set_to_none=True)
+            s_real = D(x, t)
+            s_fake = D(fake.detach(), t)
+            loss_d = d_loss_dcgan(s_real, s_fake)
+            loss_d.backward()
+            opt_d.step()
+
+            opt_g.zero_grad(set_to_none=True)
+            loss_g = g_loss(D(fake, t))
+            loss_g.backward()
+            opt_g.step()
+
+            stats = dict(d_loss=loss_d.item(), g_loss=loss_g.item(),
+                         d_real=torch.sigmoid(s_real).mean().item(),
+                         d_fake=torch.sigmoid(s_fake).mean().item(),
+                         acc_real=_accuracy(s_real, 1.0), acc_fake=_accuracy(s_fake, 0.0))
+
+        elif mode == "gan_cls":
+            # TODO (Plan steps 8-9), the cond branch plus:
+            #   D step: s_wrong = D(x, t_wrong); loss_d = d_loss_gan_cls(s_real, s_wrong, s_fake)
+            #   G step: if interpolate: t_int = interpolate_text(t); loss_g = loss_g + g_loss(D(G(z, t_int), t_int))
+            #   stats: add d_wrong / acc_wrong
+            raise NotImplementedError("mode 'gan_cls' comes in milestone 2 (Plan steps 8-9)")
         else:
             raise ValueError(f"unknown mode {mode!r}")
 
@@ -146,7 +163,15 @@ def train(experiment: str = "E0_dcgan", seed: int = config.RANDOM_SEED, epochs: 
 
     # Fixed noise (made on CPU so it is identical on mps/cuda/cpu) to compare epochs fairly.
     fixed_z = torch.randn(64, G.latent_dim, 1, 1, generator=torch.Generator().manual_seed(seed))
-    fixed_t = None  # TODO (Plan step 7): 8 held-out TEST captions x 8 noise vectors for conditional runs
+    fixed_t = None
+    if exp["conditional"]:
+        # Grid rows = 8 held-out TEST captions (unseen classes), columns = the same 8 noise vectors.
+        fixed_z = fixed_z[:8].repeat(8, 1, 1, 1)
+        fixed_t, captions = fixed_test_captions()
+        fixed_t = fixed_t.repeat_interleave(8, dim=0)
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        (sample_dir / "captions.txt").write_text(
+            "".join(f"row {i + 1}: {c}\n" for i, c in enumerate(captions)))
 
     start = 0
     if resume and ckpt_path.exists():
@@ -176,6 +201,25 @@ def train(experiment: str = "E0_dcgan", seed: int = config.RANDOM_SEED, epochs: 
                         opt_d=opt_d.state_dict(), epoch=epoch, fixed_z=fixed_z, experiment=experiment,
                         seed=seed, config={k: v for k, v in exp.items()})
     return log_path
+
+
+def fixed_test_captions(n: int = 8) -> tuple[torch.Tensor, list[str]]:
+    """First caption of one image from each of n different held-out test classes: (n, 512) embeddings + texts."""
+    from src.data import class_split, load_captions, load_image_cache
+    from src.text_encoder import load_text_cache
+
+    cache = load_image_cache()
+    emb = load_text_cache(cache["ids"])
+    caps = load_captions()
+    rows, seen = [], set()
+    for r in class_split(cache["labels"])["test"].tolist():
+        y = int(cache["labels"][r])
+        if y not in seen:
+            seen.add(y)
+            rows.append(r)
+        if len(rows) == n:
+            break
+    return emb[rows, 0].float(), [caps[cache["ids"][r]][0] for r in rows]
 
 
 def _append_csv(path: Path, row: dict) -> None:

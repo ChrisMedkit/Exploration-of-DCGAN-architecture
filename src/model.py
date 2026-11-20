@@ -100,13 +100,12 @@ class TextProjection(nn.Module):
 
     def __init__(self, text_dim: int = config.TEXT_DIM, proj_dim: int = config.TEXT_PROJ_DIM):
         super().__init__()
-        # TODO (Plan step 7): self.net = nn.Sequential(nn.Linear(text_dim, proj_dim), nn.BatchNorm1d(proj_dim),
-        #                                             nn.LeakyReLU(0.2, inplace=True))
         self.text_dim, self.proj_dim = text_dim, proj_dim
+        self.net = nn.Sequential(nn.Linear(text_dim, proj_dim), nn.BatchNorm1d(proj_dim),
+                                 nn.LeakyReLU(0.2, inplace=True))
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        # TODO: return self.net(t)   (B, 512) -> (B, 128)
-        raise NotImplementedError
+        return self.net(t)  # (B, 512) -> (B, 128)
 
 
 class CondGenerator(Generator):
@@ -119,15 +118,12 @@ class CondGenerator(Generator):
                  text_dim: int = config.TEXT_DIM, proj_dim: int = config.TEXT_PROJ_DIM):
         super().__init__(latent_dim=latent_dim + proj_dim, ngf=ngf)
         self.latent_dim = latent_dim  # noise size only; the stem was built for latent_dim + proj_dim
-        # TODO (Plan step 7): self.text_proj = TextProjection(text_dim, proj_dim)
+        self.text_proj = TextProjection(text_dim, proj_dim)
 
     def forward(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        # TODO (Plan step 7):
-        #   1. h = self.text_proj(t)                           (B, 128)
-        #   2. h = h[:, :, None, None]                         (B, 128, 1, 1)
-        #   3. x = torch.cat([z, h], dim=1)                    (B, 228, 1, 1)
-        #   4. return self.head(self.body(self.stem(x)))       (B, 3, 64, 64)
-        raise NotImplementedError
+        h = self.text_proj(t)[:, :, None, None]           # (B, 128, 1, 1)
+        x = torch.cat([z, h], dim=1)                      # (B, 228, 1, 1)
+        return self.head(self.body(self.stem(x)))         # (B, 3, 64, 64)
 
 
 class CondDiscriminator(Discriminator):
@@ -140,18 +136,15 @@ class CondDiscriminator(Discriminator):
     def __init__(self, ndf: int = config.NDF, text_dim: int = config.TEXT_DIM,
                  proj_dim: int = config.TEXT_PROJ_DIM):
         super().__init__(ndf=ndf)
-        # TODO (Plan step 7):
-        #   self.text_proj = TextProjection(text_dim, proj_dim)
-        #   self.joint = nn.Sequential(nn.Conv2d(ndf * 8 + proj_dim, ndf * 8, 1, 1, 0, bias=False),
-        #                              nn.BatchNorm2d(ndf * 8), nn.LeakyReLU(0.2, inplace=True))
-        #   (self.head from Discriminator is reused unchanged)
+        self.text_proj = TextProjection(text_dim, proj_dim)
+        self.joint = nn.Sequential(nn.Conv2d(ndf * 8 + proj_dim, ndf * 8, 1, 1, 0, bias=False),
+                                   nn.BatchNorm2d(ndf * 8), nn.LeakyReLU(0.2, inplace=True))
+        # self.head from Discriminator is reused unchanged
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        # TODO (Plan step 7):
-        #   1. f = self.features(x)                                       (B, 512, 4, 4)
-        #   2. h = self.text_proj(t)[:, :, None, None].expand(-1, -1, *f.shape[-2:])   (B, 128, 4, 4)
-        #   3. return self.head(self.joint(torch.cat([f, h], 1))).view(-1)            (B,)
-        raise NotImplementedError
+        f = self.features(x)                                                   # (B, 512, 4, 4)
+        h = self.text_proj(t)[:, :, None, None].expand(-1, -1, *f.shape[-2:])  # (B, 128, 4, 4)
+        return self.head(self.joint(torch.cat([f, h], 1))).view(-1)           # (B,)
 
 
 def build_models(conditional: bool, device: torch.device | str = config.DEVICE):

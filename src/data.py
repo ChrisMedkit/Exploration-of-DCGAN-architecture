@@ -93,30 +93,51 @@ class FlowersImages(Dataset):
 def load_captions(captions_dir: Path = config.CAPTIONS_DIR) -> dict[str, list[str]]:
     """Return {"image_00001": [10 captions], ...} from Reed et al.'s text_c10 folder.
 
-    Source: Reed et al. (2016) "cvpr2016_flowers" release (github.com/reedscot/icml2016, README links);
+    Source: Reed et al. (2016) "cvpr2016_flowers" release (github.com/reedscot/cvpr2016, README links);
     unpack so that data/raw/text_c10/class_00001/image_06734.txt exists. Each .txt has one caption
-    per line. Record the exact download link and license in data/README.md.
-
-    TODO (Plan step 5):
-      1. for p in sorted(captions_dir.glob("class_*/image_*.txt")):
-      2.     lines = [" ".join(l.split()) for l in p.read_text().splitlines() if l.strip()]
-      3.     out[p.stem] = lines
-      4. assert len(out) == 8189 and every entry has >= config.CAPTIONS_PER_IMAGE captions
+    per line. Whitespace inside a caption is collapsed to single spaces.
     """
-    raise NotImplementedError
+    captions_dir = Path(captions_dir)
+    out = {}
+    for p in sorted(captions_dir.glob("class_*/image_*.txt")):
+        lines = [" ".join(line.split()) for line in p.read_text(errors="replace").splitlines()]
+        out[p.stem] = [line for line in lines if line]
+    if not out:
+        raise FileNotFoundError(f"No class_*/image_*.txt caption files under {captions_dir}")
+    return out
+
+
+def check_captions(captions: dict[str, list[str]], ids: list[str],
+                   per_image: int = config.CAPTIONS_PER_IMAGE) -> None:
+    """Every cached image must have at least `per_image` captions (raises with the first offenders)."""
+    missing = [i for i in ids if i not in captions]
+    short = [i for i in ids if i in captions and len(captions[i]) < per_image]
+    if missing or short:
+        raise ValueError(f"{len(missing)} images without captions (e.g. {missing[:3]}), "
+                         f"{len(short)} with < {per_image} captions (e.g. {short[:3]})")
 
 
 def class_split(labels: torch.Tensor, captions_dir: Path = config.CAPTIONS_DIR) -> dict[str, torch.Tensor]:
     """Return {"train": row indices, "test": row indices} split BY CLASS (zero-shot, as in Reed et al.).
 
-    TODO (Plan step 5):
-      1. Read captions_dir.parent / "trainvalclasses.txt" and "testclasses.txt" from the Reed release
-         (lines like "class_00001" -> label 0).
-      2. If those files are missing, fall back to a fixed split: torch.randperm(102, generator seeded
-         with config.RANDOM_SEED), first 82 classes = train, last 20 = test. Note which one you used.
-      3. Return index tensors of the rows whose label is in each set. No class may be in both.
+    Uses Reed's trainvalclasses.txt / testclasses.txt (lines like "class_00001" -> label 0) when they
+    sit next to text_c10/; otherwise a seeded split: 82 train classes, 20 test classes. The result
+    also carries "source" so the report can say which split was used.
     """
-    raise NotImplementedError
+    root = Path(captions_dir).parent
+    tv, te = root / "trainvalclasses.txt", root / "testclasses.txt"
+    if tv.exists() and te.exists():
+        def read(p):
+            return {int(s.strip().split("_")[-1]) - 1 for s in p.read_text().splitlines() if s.strip()}
+        train_cls, test_cls, source = read(tv), read(te), "reed"
+    else:
+        perm = torch.randperm(102, generator=torch.Generator().manual_seed(config.RANDOM_SEED)).tolist()
+        train_cls, test_cls, source = set(perm[:82]), set(perm[82:]), "seeded"
+    if train_cls & test_cls:
+        raise ValueError("a class is in both the train and test split")
+    train_mask = torch.tensor([int(y) in train_cls for y in labels])
+    test_mask = torch.tensor([int(y) in test_cls for y in labels])
+    return {"train": train_mask.nonzero().flatten(), "test": test_mask.nonzero().flatten(), "source": source}
 
 
 class FlowersCaptions(Dataset):
@@ -130,20 +151,28 @@ class FlowersCaptions(Dataset):
     def __init__(self, images: torch.Tensor, labels: torch.Tensor, text_emb: torch.Tensor,
                  rows: torch.Tensor, flip: bool = True):
         # text_emb: (N_images, 10, 512) float16 from src.text_encoder.load_text_cache(), row-aligned with images
-        # TODO (Plan step 6): store args; build self.by_class = {label: tensor of rows} for wrong-caption sampling
-        raise NotImplementedError
+        assert len(text_emb) == len(images) == len(labels)
+        self.images, self.labels, self.text_emb, self.flip = images, labels, text_emb, flip
+        self.rows = torch.as_tensor(rows, dtype=torch.long)
+        # Wrong captions are drawn from rows of THIS split only, so test captions never leak into training.
+        self.split_labels = labels[self.rows]
+        if self.split_labels.unique().numel() < 2:
+            raise ValueError("FlowersCaptions needs at least 2 classes to sample wrong captions")
 
     def __len__(self) -> int:
-        # TODO: number of rows in this split
-        raise NotImplementedError
+        return len(self.rows)
 
     def __getitem__(self, i: int):
-        # TODO (Plan step 6):
-        #   1. r = self.rows[i]; x = to_model_range(self.images[r]) (+ random flip like FlowersImages)
-        #   2. t_match = self.text_emb[r, random caption index].float()
-        #   3. pick a row r2 with labels[r2] != labels[r]; t_wrong = self.text_emb[r2, random index].float()
-        #   4. return x, t_match, t_wrong, r
-        raise NotImplementedError
+        r = int(self.rows[i])
+        x = to_model_range(self.images[r])
+        if self.flip and torch.rand(()) < 0.5:
+            x = x.flip(-1)
+        k = self.text_emb.shape[1]
+        t_match = self.text_emb[r, torch.randint(k, ())].float()
+        others = self.rows[self.split_labels != self.labels[r]]
+        r2 = int(others[torch.randint(len(others), ())])
+        t_wrong = self.text_emb[r2, torch.randint(k, ())].float()
+        return x, t_match, t_wrong, r
 
 
 # ============================================================ loaders
@@ -152,17 +181,16 @@ def get_dataloader(conditional: bool, batch_size: int = config.BATCH_SIZE, split
     """DataLoader for an experiment. drop_last=True keeps BatchNorm statistics stable.
 
     E0 (conditional=False) trains on ALL images (no captions, so no zero-shot split is needed).
-    E1-E3 (conditional=True) TODO: use class_split(...)[split] rows and FlowersCaptions.
+    E1-E3 (conditional=True) use only the 82 train classes; the 20 test classes are held out.
     """
     cache = load_image_cache()
     if not conditional:
         ds = FlowersImages(cache["images"], cache["labels"])
     else:
-        # TODO (Plan step 6):
-        #   from src.text_encoder import load_text_cache
-        #   rows = class_split(cache["labels"])[split]
-        #   ds = FlowersCaptions(cache["images"], cache["labels"], load_text_cache(cache["ids"]), rows)
-        raise NotImplementedError("Conditional data comes in milestone 1 (Plan step 6)")
+        from src.text_encoder import load_text_cache
+        rows = class_split(cache["labels"])[split]
+        ds = FlowersCaptions(cache["images"], cache["labels"], load_text_cache(cache["ids"]), rows,
+                             flip=shuffle)
     g = torch.Generator().manual_seed(config.RANDOM_SEED)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, drop_last=shuffle,
                       num_workers=config.NUM_WORKERS, generator=g)

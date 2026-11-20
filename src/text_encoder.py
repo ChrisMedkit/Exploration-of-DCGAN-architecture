@@ -1,57 +1,76 @@
-"""Frozen CLIP ViT-B/32 text encoder (Milestone 1, TODO).
+"""Frozen CLIP ViT-B/32 text encoder (Milestone 1).
 
 CLIP is used ONLY as a fixed feature extractor: encode every caption once, cache to disk, never
 backprop into it. This replaces Reed et al.'s char-CNN-RNN encoder (the one change to their recipe,
-justified in report §2.2). `import clip` is already available in Anaconda base.
+justified in report §2.2). OpenAI's `clip` package is already available in Anaconda base.
 """
 
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
+from tqdm import tqdm
 
 from src import config
 
 
 def load_clip(device: torch.device | str = config.DEVICE):
-    """Return (model, preprocess) for config.CLIP_MODEL in eval mode with requires_grad False.
+    """Return (model, preprocess) for config.CLIP_MODEL in eval mode with gradients off.
 
-    TODO (Plan step 5):
-      import clip
-      model, preprocess = clip.load(config.CLIP_MODEL, device=device, jit=False)
-      model.eval().requires_grad_(False); return model, preprocess
+    First call downloads the ViT-B/32 weights (~340 MB) to ~/.cache/clip.
     """
-    raise NotImplementedError
+    import clip
+
+    model, preprocess = clip.load(config.CLIP_MODEL, device=device, jit=False)
+    model.eval().requires_grad_(False)
+    return model, preprocess
 
 
 @torch.no_grad()
-def encode_text(texts: list[str], model=None, device: torch.device | str = config.DEVICE) -> torch.Tensor:
-    """List of captions -> L2-normalised CLIP embeddings (len(texts), 512) float32 on CPU.
+def encode_text(texts: list[str], model, device: torch.device | str = config.DEVICE) -> torch.Tensor:
+    """List of captions -> L2-normalised CLIP embeddings (len(texts), 512) float32 on CPU."""
+    import clip
 
-    TODO (Plan step 5):
-      tokens = clip.tokenize(texts, truncate=True).to(device)   # 77-token limit
-      z = model.encode_text(tokens).float()
-      return torch.nn.functional.normalize(z, dim=-1).cpu()
-    """
-    raise NotImplementedError
+    tokens = clip.tokenize(texts, truncate=True).to(device)  # 77-token limit; longer captions are cut
+    z = model.encode_text(tokens).float()
+    return F.normalize(z, dim=-1).cpu()
 
 
 def build_text_cache(captions: dict[str, list[str]], ids: list[str], out: Path = config.TEXT_CACHE,
-                     batch_size: int = 512, force: bool = False) -> Path:
+                     batch_size: int = 512, force: bool = False, device=config.DEVICE) -> Path:
     """Encode the first CAPTIONS_PER_IMAGE captions of every image; save (N, 10, 512) float16 row-aligned with ids.
 
-    TODO (Plan step 5):
-      1. skip if out exists and not force
-      2. flat = [captions[i][k] for i in ids for k in range(config.CAPTIONS_PER_IMAGE)]
-      3. encode in batches of batch_size with encode_text, cat, .view(len(ids), 10, 512).half()
-      4. torch.save(dict(emb=..., ids=ids, model=config.CLIP_MODEL), out)
-    Size check: 8,189 x 10 x 512 x 2 bytes ~ 84 MB. Takes a few minutes on MPS.
+    Size: 8,189 x 10 x 512 x 2 bytes ~ 84 MB.
     """
-    raise NotImplementedError
+    out = Path(out)
+    if out.exists() and not force:
+        return out
+    k = config.CAPTIONS_PER_IMAGE
+    flat = [captions[i][j] for i in ids for j in range(k)]
+    model, _ = load_clip(device)
+    chunks = [encode_text(flat[s:s + batch_size], model, device)
+              for s in tqdm(range(0, len(flat), batch_size), desc="Encoding captions with CLIP")]
+    emb = torch.cat(chunks).view(len(ids), k, -1).half()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(dict(emb=emb, ids=list(ids), model=config.CLIP_MODEL), out)
+    return out
 
 
 def load_text_cache(ids: list[str], path: Path = config.TEXT_CACHE) -> torch.Tensor:
-    """Load the cached embeddings and check they are in the same row order as the image cache.
+    """Load cached embeddings (N, 10, 512) float16, checking row order matches the image cache.
 
-    TODO (Plan step 5): d = torch.load(path); assert d["ids"] == ids; return d["emb"]
+    Builds the cache on first use (reads data/raw/text_c10, runs CLIP once).
     """
-    raise NotImplementedError
+    path = Path(path)
+    if not path.exists():
+        from src.data import check_captions, load_captions
+
+        caps = load_captions()
+        check_captions(caps, ids)
+        build_text_cache(caps, ids, path)
+    d = torch.load(path, weights_only=False)
+    if d["ids"] != list(ids):
+        raise ValueError("text cache rows do not match the image cache; rebuild with force=True")
+    if d["model"] != config.CLIP_MODEL:
+        raise ValueError(f"text cache was built with {d['model']}, config wants {config.CLIP_MODEL}")
+    return d["emb"]
